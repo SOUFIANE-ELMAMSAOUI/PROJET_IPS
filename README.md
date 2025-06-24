@@ -43,7 +43,7 @@ Servomoteur MG90S : Plage 0-180° (PWM 1000-6500)
 Réponse linéaire : Force → Angle de rotation
 Fréquence PWM : 50Hz (standard servomoteur)
 
-#🏗️ Architecture Technique:
+# 🏗️ Architecture Technique:
 - Capteur Force → Tension Analogique → ADC STM32 → Valeur Numérique → Masse → Force → Angle → PWM
 -   (physique)  →    (0-3.3V)   →      (12 bits) →   (0-4095)  →     (g) →  (N)  → (0-180°) → (1000-6500)
 
@@ -91,7 +91,7 @@ Fréquence PWM : 50Hz (standard servomoteur)
 - Jauge de contrainte : https://web.enib.fr/~bourgeot/IPS/Datasheets/AN078-Strain_Gauge_Measurement-A_Tutorial.pdf
 - Servomoteur : https://www.alldatasheet.fr/datasheet-pdf/pdf/1132104/ETC2/MG90S.html
 
-#👨‍💻 Notre équipe:
+# 👨‍💻 Notre équipe:
 - Développeur embarqué, câblage et responsable de l'intégration système :  SOUFIANE EL MAMSAOUI
 - Créateur du site web portfolio et de l'interface de visualisation 3D : AYOUB MACHKOUR
 - Conception de circuits et réalisation de cartes électroniques : Antoine VERMANDER
