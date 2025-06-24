@@ -97,7 +97,8 @@ Réferences:
 - Conception de circuits et réalisation de cartes électroniques : Antoine VERMANDER
 - Conception électronique et validation des circuits : Benjamin HEYSCH
 
- Encadrant : 
+Encadrant : 
  - Mr.Jean-Matthieu BOURGEOT
- Institution :
+
+Institution :
 -  ENIB
