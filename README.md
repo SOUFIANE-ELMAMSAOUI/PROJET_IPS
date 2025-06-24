@@ -1,10 +1,10 @@
 # PROJET_IPS
    PROJET IPS - Mesure de déformation par jauges - Dispositif de commande haptique.
 
-#📋 Description du Projet:
+# 📋 Description du Projet:
 Ce projet développe un instrument de mesure intelligent qui convertit les forces appliquées sur une lame instrumentée en indication visuelle via un servomoteur. Le système propose deux modes de fonctionnement distincts : un mode automatique où le servomoteur reflète la force mesurée, et un mode manuel où l'utilisateur contrôle directement la position du servomoteur.
 
-#🎯 Objectifs:
+# 🎯 Objectifs:
 - Concevoir le système de mesure, y compris une interface permettant de visualiser les données et les traiter.
 - Etudier l’influence de la masse sur la déformation des jauges.
 - Etudier l’influence de la position de la masse sur la déformation des jauges.
@@ -17,7 +17,7 @@ Ce projet développe un instrument de mesure intelligent qui convertit les force
 - Comparer les montages avec 1, 2 ou 4 jauges.
 
 
-#🌐 Démonstration en Ligne:
+# 🌐 Démonstration en Ligne:
 - Site Web du Projet : https://ips-groupe-c-deformation-jauge.netlify.app/
 
 
@@ -28,11 +28,11 @@ Ce projet développe un instrument de mesure intelligent qui convertit les force
 - Calibration automatique (facteur de conversion : 188.68)
 - Plage de mesure : 0-600g (0-5.9N)
 
-##🎮 Modes de Fonctionnement
+## 🎮 Modes de Fonctionnement
 - Mode Manuel : Contrôle direct de l'angle du servomoteur.
 - Mode Automatique : Position proportionnelle à la force mesurée.
 
-##📡 Communication: 
+## 📡 Communication: 
 - Protocol UART : 115200 bauds, format structuré
 - Données temps réel : Tension, masse, force, angle
 - Commandes bidirectionnelles avec accusé de réception
@@ -79,7 +79,7 @@ Fréquence PWM : 50Hz (standard servomoteur)
 ### Format des commandes UART :
     "Mode,Angle,e"
 - 1,90,e : Mode manuel, angle 90°
- 2,0,e : Mode automatique
+- 2,0,e : Mode automatique
 
 ### Format des données reçues :
 - V:2.456    // Tension en Volts
