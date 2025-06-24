@@ -75,11 +75,11 @@ Programmation:
 - Programmer le firmware
 - Vérifier les connexions matérielles
 
- Interface de Contrôle:
--Format des commandes UART :
+
+Format des commandes UART :
     "Mode,Angle,e"
--- 1,90,e : Mode manuel, angle 90°
--- 2,0,e : Mode automatique
+- 1,90,e : Mode manuel, angle 90°
+ 2,0,e : Mode automatique
 
 Format des données reçues :
 - V:2.456    // Tension en Volts
