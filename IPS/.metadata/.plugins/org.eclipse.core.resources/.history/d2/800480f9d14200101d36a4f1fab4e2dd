@@ -1,0 +1,595 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
+/* Private typedef -----------------------------------------------------------*/
+#define CIRCULAR_BUFFER_MAX 60
+
+typedef volatile struct CircularBuffer {
+	char data[CIRCULAR_BUFFER_MAX];
+	int  write_ptr;		/* pointeur (index) d'écriture */
+	int  read_ptr;		/* pointeur (index) de lecture */
+} CircularBuffer;
+
+static CircularBuffer reception_buffer = {
+	.write_ptr=0,
+	.read_ptr=0
+};
+
+#define DATA_ARRAY_SIZE 100
+
+typedef volatile struct DataArray {
+	int values[DATA_ARRAY_SIZE][3];
+	int current_index;
+	int total_size;
+} DataArray;
+
+/* Private define ------------------------------------------------------------*/
+#define ADC_BUFFER_SIZE 1
+#define TRANSMISSION_BUFFER_SIZE 1000 	//Taille buffer d'envoi des données
+#define RECEPTION_BUFFER_SIZE 1 	//Taille buffer de reception des données (1 caractère à la fois)
+#define SERVO_MIN_ANGLE 0
+#define SERVO_MAX_ANGLE 180
+// Nouvelles valeurs pour MG90S
+#define PWM_MIN_VALUE 1000        // 1ms pulse (0°)
+#define PWM_MAX_VALUE 6500        // 2ms pulse (180°)
+#define GRAVITY_CONSTANT 9.81              // Pesanteur en m/s²
+#define AVERAGING_SAMPLES 16      // Nombre d'échantillons pour moyennage
+
+/* Variables ---------------------------------------------------------*/
+uint16_t measured_voltage;
+uint16_t adc_readings[AVERAGING_SAMPLES];  // Tableau pour moyennage ADC
+char reception_data[RECEPTION_BUFFER_SIZE];    // Réception des données
+int operation_mode = 2; // Mode automatique par défaut pour le test
+int servo_position = 0;
+char parsed_commands[3][33];			// 3 listes de 33 char
+char uart_message[100];                  // Buffer pour les messages UART
+
+DataArray communication_buffer = {    // Buffer d'écriture
+		.current_index = 0,
+		.total_size = DATA_ARRAY_SIZE
+};
+
+/* Handles for peripherals */
+ADC_HandleTypeDef hadc1;
+TIM_HandleTypeDef htim2;
+UART_HandleTypeDef huart2;
+
+/* Function prototypes */
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_ADC1_Init(void);
+static void MX_USART2_UART_Init(void);
+static void MX_TIM2_Init(void);
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
+float convert_angle_to_pwm(int target_angle);
+void process_received_command(const char* command_string);
+int convert_force_to_servo_angle(float applied_force);
+float convert_voltage_to_weight(float input_voltage);
+static void insert_char_to_buffer(char received_char);
+static void reset_reception_buffer(void);
+uint16_t get_averaged_adc_reading(void);
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+  /* MCU Configuration */
+  HAL_Init();
+  SystemClock_Config();
+
+  /* Initialize peripherals */
+  MX_GPIO_Init();
+  MX_ADC1_Init();
+  MX_USART2_UART_Init();
+  MX_TIM2_Init();
+
+  /* Start PWM for servo on PA1 (TIM2_CH2) */
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+
+  /* Start UART reception */
+  HAL_UART_Receive_IT(&huart2, (uint8_t *)reception_data, 1);
+
+  /* Variables */
+  float sensor_voltage;
+  float calculated_mass;
+  float applied_force;
+  int voltage_integer, mass_integer, force_integer, automatic_angle;
+  float pwm_duty_cycle;
+  uint16_t raw_adc_value;
+
+  /* Message de démarrage */
+  strcpy(uart_message, "=== Systeme demarre - Mode diagnostic ===\r\n");
+  HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+
+  /* Configuration forcée et test du timer */
+  sprintf(uart_message, "Valeur TIM2->CCR2 initiale: %lu\r\n", (unsigned long)TIM2->CCR2);
+  HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+
+  // Arrêt puis redémarrage du timer pour s'assurer qu'il est correctement configuré
+  HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_2);
+  HAL_Delay(10);
+
+  // Configuration manuelle des registres pour être certain
+  TIM2->PSC = 41;      // Prescaler: 84MHz/42 = 2MHz
+  TIM2->ARR = 19999;   // Auto-reload: 2MHz/20000 = 50Hz
+  TIM2->CCR2 = 1500;   // Position initiale: 90°
+
+  sprintf(uart_message, "Config manuelle: PSC=%lu, ARR=%lu, CCR2=%lu\r\n",
+         (unsigned long)TIM2->PSC, (unsigned long)TIM2->ARR, (unsigned long)TIM2->CCR2);
+  HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+
+  // Activation du timer
+  TIM2->CCER |= TIM_CCER_CC2E;  // Active la sortie du canal 2
+  TIM2->CR1 |= TIM_CR1_CEN;     // Active le timer
+
+  // Test du servo avec positions fixes
+  strcpy(uart_message, "=== Test des positions du servomoteur ===\r\n");
+  HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+
+  for(int test_position = 1000; test_position <= 2000; test_position += 200) {
+      TIM2->CCR2 = test_position;
+
+      sprintf(uart_message, "Position test: %d (CCR2=%lu)\r\n",
+              test_position, (unsigned long)TIM2->CCR2);
+      HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+
+      HAL_Delay(1000);
+  }
+
+  // Position centrale
+  TIM2->CCR2 = 1500;
+  HAL_Delay(1000);
+
+  /* Main loop */
+  while (1) {
+      /* Acquisition ADC avec moyenna */
+      raw_adc_value = get_averaged_adc_reading();
+      sensor_voltage = ((float)raw_adc_value * 3.3f) / 4095.0f;
+
+      /* Messages de diagnostic détaillés */
+      sprintf(uart_message, "DIAG: Raw ADC=%d, Voltage=%d.%03d V\r\n",
+              raw_adc_value, (int)sensor_voltage, (int)((sensor_voltage-(int)sensor_voltage)*1000));
+      HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+
+      /* Calcul de la masse à partir de la tension */
+      calculated_mass = convert_voltage_to_weight(sensor_voltage);
+
+      /* Calcul de la force */
+      applied_force = (calculated_mass * 0.001f) * GRAVITY_CONSTANT;
+
+      /* Envoi des données à l'IHM en format entier */
+      voltage_integer = (int)(sensor_voltage * 1000);
+      mass_integer = (int)calculated_mass;
+      force_integer = (int)(applied_force * 1000);
+
+      /* Message principal */
+      sprintf(uart_message, "V:%d.%03d\r\nM:%d\r\nF:%d.%03d\r\n",
+              voltage_integer/1000, voltage_integer%1000, mass_integer, force_integer/1000, force_integer%1000);
+      HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+
+      /* Contrôle du servomoteur */
+      if (operation_mode == 1) {  // Mode manuel
+          pwm_duty_cycle = convert_angle_to_pwm(servo_position);
+          TIM2->CCR2 = (uint32_t)pwm_duty_cycle;  // Mise à jour directe du registre
+
+          /* Valeur CCR2 après mise à jour */
+          sprintf(uart_message, "CCR2 après mise à jour: %lu\r\n", (unsigned long)TIM2->CCR2);
+          HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+
+          /* Envoi de l'angle actuel pour l'IHM */
+          sprintf(uart_message, "A:%d\r\n", servo_position);
+          HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+
+          /* Message détaillé pour le mode manuel */
+          sprintf(uart_message, "SERVO MANUEL: Angle=%d, CCR=%lu\r\n",
+                  servo_position, (unsigned long)TIM2->CCR2);
+          HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+      }
+      else if (operation_mode == 2) {  // Mode automatique
+          automatic_angle = convert_force_to_servo_angle(applied_force);
+          pwm_duty_cycle = convert_angle_to_pwm(automatic_angle);
+          TIM2->CCR2 = (uint32_t)pwm_duty_cycle;  // Mise à jour directe du registre
+
+          /* Valeur CCR2 après mise à jour */
+          sprintf(uart_message, "CCR2 après mise à jour: %lu\r\n", (unsigned long)TIM2->CCR2);
+          HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+
+          /* Envoi de l'angle calculé pour l'IHM */
+          sprintf(uart_message, "A:%d\r\n", automatic_angle);
+          HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+
+          /* Message de débogage supplémentaire */
+          sprintf(uart_message, "SERVO AUTO: V=%d.%03d M=%d F=%d.%03d A=%d CCR=%lu\r\n",
+                 voltage_integer/1000, voltage_integer%1000, mass_integer, force_integer/1000, force_integer%1000,
+                 automatic_angle, (unsigned long)TIM2->CCR2);
+          HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+      }
+
+      /* Clignotement de la LED pour indiquer que le programme tourne */
+      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+
+      /* Délai entre les mesures */
+      HAL_Delay(500);  // Réduit à 500ms pour un diagnostic plus rapide
+  }
+}
+
+/**
+ * @brief Moyenne plusieurs lectures ADC pour réduire le bruit
+ * @return Valeur ADC moyennée
+ */
+uint16_t get_averaged_adc_reading(void) {
+    uint32_t total_sum = 0;
+    uint16_t sample_counter;
+
+    for(sample_counter = 0; sample_counter < AVERAGING_SAMPLES; sample_counter++) {
+        HAL_ADC_Start(&hadc1);
+        HAL_ADC_PollForConversion(&hadc1, 10);
+        total_sum += HAL_ADC_GetValue(&hadc1);
+        HAL_ADC_Stop(&hadc1);
+        HAL_Delay(1);  // Petit délai entre les mesures
+    }
+
+    while (1) {
+        // 1. Acquisition ADC avec moyennage
+        raw_adc_value = get_averaged_adc_reading();
+        sensor_voltage = ((float)raw_adc_value * 3.3f) / 4095.0f;
+
+        // 2. Calculs de masse et force
+        calculated_mass = convert_voltage_to_weight(sensor_voltage);
+        applied_force = (calculated_mass * 0.001f) * GRAVITY_CONSTANT;
+
+        // 3. Envoi des données à l'IHM
+        sprintf(uart_message, "V:%d.%03d\r\nM:%d\r\nF:%d.%03d\r\n", ...);
+        HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+
+        // 4. Contrôle du servomoteur selon le mode
+        if (operation_mode == 1) {        // Mode manuel
+            pwm_duty_cycle = convert_angle_to_pwm(servo_position);
+        } else if (operation_mode == 2) { // Mode automatique
+            automatic_angle = convert_force_to_servo_angle(applied_force);
+            pwm_duty_cycle = convert_angle_to_pwm(automatic_angle);
+        }
+        TIM2->CCR2 = (uint32_t)pwm_duty_cycle;
+    }
+
+
+    return (uint16_t)(total_sum / AVERAGING_SAMPLES);
+}
+
+/**
+ * @brief Calcule la masse à partir de la tension mesurée
+ * @param input_voltage Tension mesurée en Volts
+ * @return Masse calculée en grammes
+ */
+float convert_voltage_to_weight(float input_voltage) {
+    float weight_result;
+    float conversion_factor = 188.68f;
+    weight_result = conversion_factor * input_voltage;
+    char debug_output[50];
+
+    sprintf(debug_output, "CONV: %d.%03d V -> %d g\r\n",
+            (int)input_voltage, (int)((input_voltage-(int)input_voltage)*1000), (int)weight_result);
+    HAL_UART_Transmit(&huart2, (uint8_t*)debug_output, strlen(debug_output), HAL_MAX_DELAY);
+
+    return weight_result;
+}
+
+/**
+ * @brief Convertit une force en angle pour le servomoteur
+ * @param applied_force Force en Newtons
+ * @return Angle correspondant (0-180°)
+ */
+int convert_force_to_servo_angle(float applied_force) {
+    float minimum_force = 0.0f;
+    float maximum_force = 5.886f;  // Force maximale en N (100g)
+
+    if (applied_force < minimum_force) applied_force = minimum_force;
+    if (applied_force > maximum_force) applied_force = maximum_force;
+
+    float resulting_angle = SERVO_MIN_ANGLE + ((applied_force - minimum_force) / (maximum_force - minimum_force)) * (SERVO_MAX_ANGLE - SERVO_MIN_ANGLE);
+    return (int)resulting_angle;
+}
+
+/**
+ * @brief Convertit un angle en duty cycle pour le servomoteur
+ * @param target_angle Angle souhaité (0-180°)
+ * @return Duty cycle correspondant
+ */
+float convert_angle_to_pwm(int target_angle) {
+    if (target_angle < SERVO_MIN_ANGLE) target_angle = SERVO_MIN_ANGLE;
+    if (target_angle > SERVO_MAX_ANGLE) target_angle = SERVO_MAX_ANGLE;
+    float pwm_value = PWM_MIN_VALUE + (((float)(target_angle - SERVO_MIN_ANGLE) / (SERVO_MAX_ANGLE - SERVO_MIN_ANGLE)) * (PWM_MAX_VALUE - PWM_MIN_VALUE));
+    return pwm_value;
+}
+
+/**
+ * @brief Traite les commandes reçues via UART
+ * @param command_string Chaîne de caractères reçue
+ */
+void process_received_command(const char* command_string) {
+    char temporary_data[CIRCULAR_BUFFER_MAX];
+    strcpy(temporary_data, command_string);  // Copie car strtok modifie la chaîne
+
+    char *command_token = strtok(temporary_data, ",");  // Découpage de la commande reçue
+    int token_index = 0;
+    while (command_token && token_index < 3) {
+        strcpy(parsed_commands[token_index], command_token);
+        token_index++;
+        command_token = strtok(NULL, ",");
+    }
+
+    if (token_index > 0) {
+        operation_mode = atoi(parsed_commands[0]);  // Premier paramètre : mode
+    }
+
+    if (token_index > 1) {  // Deuxième paramètre : angle manuel
+        int desired_angle = atoi(parsed_commands[1]);
+        if (desired_angle >= SERVO_MIN_ANGLE && desired_angle <= SERVO_MAX_ANGLE) {
+            servo_position = desired_angle;
+        }
+    }
+
+    // Accusé de réception
+    sprintf(uart_message, "ACK:M%d,A%d\r\n", operation_mode, servo_position);
+    HAL_UART_Transmit(&huart2, (uint8_t*)uart_message, strlen(uart_message), HAL_MAX_DELAY);
+}
+
+/**
+ * @brief Callback de réception UART
+ */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    HAL_UART_Receive_IT(&huart2, (uint8_t *)reception_data, 1);
+    char received_character = (char)reception_data[0];
+
+    // 'e' marque la fin de la commande
+    if (received_character == 'e') {
+        reception_buffer.data[reception_buffer.write_ptr] = '\0';
+        process_received_command(reception_buffer.data);
+        reset_reception_buffer();
+    } else {
+        insert_char_to_buffer(received_character);
+    }
+}
+
+/**
+ * @brief Ajoute un caractère au buffer circulaire
+ * @param received_char Caractère à ajouter
+ */
+static void insert_char_to_buffer(char received_char) {
+    // Vérification que le buffer n'est pas plein
+    if ((reception_buffer.write_ptr + 1) % CIRCULAR_BUFFER_MAX != reception_buffer.read_ptr) {
+        // Ajout du caractère au buffer
+        reception_buffer.data[reception_buffer.write_ptr] = received_char;
+        // Incrémentation de l'index d'écriture
+        reception_buffer.write_ptr = (reception_buffer.write_ptr + 1) % CIRCULAR_BUFFER_MAX;
+    }
+}
+
+/**
+ * @brief Vide le buffer circulaire
+ */
+static void reset_reception_buffer(void) {
+    // Réinitialisation des index de lecture et d'écriture
+    reception_buffer.write_ptr = 0;
+    reception_buffer.read_ptr = 0;
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Configure the main internal regulator output voltage
+  */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 16;
+  RCC_OscInitStruct.PLL.PLLN = 336;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* Common config - Configuration optimisée pour réduire le bruit */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCKPRESCALER_PCLK_DIV4;  // Diviseur plus élevé pour réduire le bruit
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.ScanConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* Configure Regular Channel with longer sampling time */
+  sConfig.Channel = ADC_CHANNEL_0;
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_144CYCLES;  // Temps d'échantillonnage plus long pour stabilité
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* Configuration correcte pour 50Hz */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 41;              // 84MHz/42 = 2MHz
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 19999;             // 2MHz/20000 = 50Hz
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+
+  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 1500;               // Position initiale (90°)
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+
+  /* Configuration de PA1 (TIM2_CH2) en mode alternatif */
+  GPIO_InitStruct.Pin = GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /* Configure GPIO pin : PA5 - LED */
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+}
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */

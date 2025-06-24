@@ -1,0 +1,21 @@
+11:07:58 **** Incremental Build of configuration Debug for project Projet_IPS ****
+make -j16 all 
+arm-none-eabi-gcc "../Core/Src/main.c" -mcpu=cortex-m4 -std=gnu11 -g3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32F411xE -c -I../Core/Inc -I../Drivers/STM32F4xx_HAL_Driver/Inc -I../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -MMD -MP -MF"Core/Src/main.d" -MT"Core/Src/main.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/main.o"
+../Core/Src/main.c: In function 'HAL_UART_RxCpltCallback':
+../Core/Src/main.c:339:27: warning: passing argument 1 of 'computeData' discards 'volatile' qualifier from pointer target type [-Wdiscarded-qualifiers]
+  339 |         computeData(rx_buf.buf);
+      |                     ~~~~~~^~~~
+../Core/Src/main.c:301:30: note: expected 'const char *' but argument is of type 'volatile char *'
+  301 | void computeData(const char* data) {
+      |                  ~~~~~~~~~~~~^~~~
+arm-none-eabi-gcc -o "Projet_IPS.elf" @"objects.list"   -mcpu=cortex-m4 -T"D:\IPS\Projet_IPS\STM32F411RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Projet_IPS.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+Finished building target: Projet_IPS.elf
+ 
+arm-none-eabi-size  Projet_IPS.elf 
+arm-none-eabi-objdump -h -S Projet_IPS.elf  > "Projet_IPS.list"
+   text	   data	    bss	    dec	    hex	filename
+  21392	     96	   2224	  23712	   5ca0	Projet_IPS.elf
+Finished building: default.size.stdout
+ 
+Finished building: Projet_IPS.list
+ 
