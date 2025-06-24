@@ -45,7 +45,7 @@ Fréquence PWM : 50Hz (standard servomoteur)
 
 🏗️ Architecture Technique:
 - Capteur Force → Tension Analogique → ADC STM32 → Valeur Numérique → Masse → Force → Angle → PWM
--   (physique)      (0-3.3V)         (12 bits)    (0-4095)       (g)   (N)   (0-180°)  (1000-6500)
+-   (physique)  →    (0-3.3V)   →      (12 bits) →   (0-4095)  →     (g) →  (N)  → (0-180°) → (1000-6500)
 
  Matériel Requis:
 - Microcontrôleur : STM32 (série F411)
@@ -76,10 +76,10 @@ Programmation:
 - Vérifier les connexions matérielles
 
  Interface de Contrôle:
-Format des commandes UART :
+-Format des commandes UART :
     "Mode,Angle,e"
-- 1,90,e : Mode manuel, angle 90°
-- 2,0,e : Mode automatique
+-- 1,90,e : Mode manuel, angle 90°
+-- 2,0,e : Mode automatique
 
 Format des données reçues :
 - V:2.456    // Tension en Volts
@@ -97,5 +97,7 @@ Réferences:
 - Conception de circuits et réalisation de cartes électroniques : Antoine VERMANDER
 - Conception électronique et validation des circuits : Benjamin HEYSCH
 
-- Encadrant : Mr.Jean-Matthieu BOURGEOT
-- Institution : ENIB
+ Encadrant : 
+ - Mr.Jean-Matthieu BOURGEOT
+ Institution :
+-  ENIB
